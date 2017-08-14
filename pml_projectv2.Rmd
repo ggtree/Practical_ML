@@ -1,0 +1,244 @@
+---
+title: "Predicting the quality of the weight lifting exercise"
+author: Lishu Zhang
+date: August 8, 2017
+output:
+  html_document:
+    keep_md: true
+---
+
+## Summary
+
+The quality of an excise is as important as its quantity, which, however is neglected by many people. The goal of this project is to predict the manner in which the participants did the weight lifting exercise. A tidy dataset was obtained by cleaning and preprocessing. Feature selections including correlation matrix (CM) and recursive feature elimination (RFE) were performed on the training dataset to reduce the number of variables for machine learning. Two Algrithms, random forest (RF) and generalized boost model (GBM), were used to build prediction models and tested on the testing dataset and further on the validation dataset. The RF model was selected for the quiz prediction based on its better prediction performance than the GBM one, measured by their accuracy.
+
+## Introduction
+
+Using devices such as Jawbone Up, Nike FuelBand and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. One thing that people regularly do is to quantify how much of a particular activity they perform in their exercise, but they rarely quantify how well they do it. 
+
+In this project, a set of data were acquired from accelerometers on the belt, forearm, arm, and dumbell of six participants who were asked to perform barbell lifts correctly and incorrectly in five different ways: Class A - exactly according to the specification; Class B - throwing the elbows to the front; Class C - lifting the dumbbell only halfway; Class D - lowering the dumbbell only halfway; and Class E - throwing the hips to the front.
+
+Our goal is to use this weight lifting exercises dataset to predict the manner in which the participants did the weight lifting. The following questions will be addressed:
+1. how the model is build?
+2. how cross validation is used?
+3. what the expected out of sample error is?
+4. why you made the choices you did?
+5. use the prediction model to predict 20 different test cases.
+
+## data obtaining
+
+The two data files (training and testing) required for the project were downloaded from the link below and stored in the working directory. All irregular values were read as NAs.
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+```{r, echo=FALSE}
+set.seed(8888)
+# read the data files
+pmlTrain <- read.csv("pml-training.csv",na.strings=c("NA","#DIV/0!",""))
+```
+
+## data cleaning
+
+To obtain a tidy data for machine learaning, we processed the data with the following:
+(1) the first 6 variables were excluded from the dataset because they contain factual information thus not useful for machine learning;
+(2) any variable containing > 60% of NAs was excluded from the dataset;
+(3) NAs were imputed with KNN algorithm;
+(4) Variables were further excluded with the Near Zero function.
+
+```{r, echo=FALSE, message=F, warning=F}
+# Remove the first 6 columns not useful for machine learning
+pmlSubset <- pmlTrain[,-c(1:6)]
+
+# Removing columns with data > 60% missing values
+naLabel <- c()
+for (i in 1:ncol(pmlSubset)) {
+  naCount <- sum(is.na(pmlSubset[, i]))
+  if (naCount > nrow(pmlSubset)*0.6) {naLabel[i] <- 1}
+  else {naLabel[i] <- 0}
+} 
+pmlSubset <- pmlSubset[, !naLabel]
+
+# NO need to impute NAs
+naCheck <- sum(is.na(pmlSubset)) # 0
+
+# Removing near zero covariates
+library(caret)  # lattice and ggplot2 also loaded
+nzvLabel <- nearZeroVar(pmlSubset, saveMetrics=TRUE)
+pmlSubset <- pmlSubset[,!nzvLabel[4]]
+```
+
+We then Split the dataset into training, testing and validation set.
+```{r, echo=FALSE}
+# Split the dataset into training, testing and validation set
+library(mlbench)
+inBuild <- createDataPartition(y=pmlSubset$classe, p=0.8, list=FALSE)
+validation <- pmlSubset[-inBuild,]
+buildData <- pmlSubset[inBuild,]
+inTrain <- createDataPartition(y=buildData$classe, p=0.7, list=FALSE)
+training1 <- buildData[inTrain,]
+testing <- buildData[-inTrain,]
+# dim(training1); dim(testing); dim(validation)  
+```
+
+## Feature selection
+### A. Create a correlation matrix of variables on the dataset to remove redundant features
+
+```{r, echo=FALSE}
+# corMatrix <- cor(training1[,-54])
+# save(corMatrix, file = "FeatureSel_corr.RData")
+load("FeatureSel_corr.RData")
+# find attributes that are highly corrected (ideally >0.75)
+hiCorr <- findCorrelation(corMatrix, cutoff=0.75, names=FALSE)
+training2 <- training1[,-hiCorr]
+# training2b <- training1[,hiCorr]
+```
+
+Features with CMs less than a cutoff of 0.75 are used for further analysis. In total 33 features were selected based on the results of the CM analysis. Those are:
+```{r, echo=FALSE}
+names(training2)[1:33]
+```
+
+### B. Use the Recursive Feature Elimination (RFE) method to reduce variables
+
+The RFE analysis shows that the 33 features have accruracies between 0.9992 to 0.9935. The plot below shows the results. 
+
+```{r, echo=FALSE}
+# Define the control using a random forest selection function
+#control <- rfeControl(functions=rfFuncs, method="cv", number=3)
+# run the RFE algorithm
+#rfeRF <- rfe(training2[,1:33], training2[,34], sizes=c(1:33), rfeControl=control)
+#save(rfeRF, file = "FeatureSel_rfeRF_3fold.RData")
+# Results of the feature selection saved to save the run time. Load them for further use.
+load("FeatureSel_rfeRF_3fold.RData")
+# summarize the results
+plot(rfeRF, type=c("g", "o"))
+
+# Top four variables with high cross validation accuracy selected for machine learning
+acc <- rfeRF$results$Accuracy
+j=1; varList <- c()
+for (i in 1:length(acc)) {
+  if (acc[i] >0.995) {varList[j] <- i; j=j+1}
+}
+training <- training2[, c(varList, 34)]
+varName <- names(training)
+validation <- validation[, varName]
+testing <- testing[, varName]
+```
+
+We choose four variables with accuracy values greater than 0.995 as our predictors for further analysis. Those are:
+```{r, echo=FALSE}
+varName[1:4]
+```
+
+## Out-of-sample error
+
+For the feature selection, we use the RFE analysis to get the variables for building up machine learning algorithms. The resampling method used in the analysis is cross validation. The out-of-sample error is caculated as 1 - accuracy. Because the cutoff was set as an accuracy of 0.995 the out-of-sample error is 0.005. 
+
+## Machine learning
+
+To obtain a better algorithm for machine learing, we build two different models: random forest and 
+boosting with trees (GBM).
+
+```{r, echo=FALSE}
+# Predict with Random forest
+#mod1_rf <- train(classe ~ ., method="rf",data=training)  # accuracy 0.992 (run time 8 min)
+#save(mod1_rf, file = "mod1_rf.RData")
+load("mod1_rf.RData")
+
+# Predict with boosting with trees
+#mod3_gbm <- train(classe ~.,method="gbm", data=training)  # accuracy 0.996 (run time < 10 min)
+#save(mod3_gbm, file = "mod3_gbm.RData")
+load("mod3_gbm.RData")
+```
+
+Here show the results using the random forest model for machine learning. The accuracy for this model is 0.992.
+
+```{r, echo=FALSE}
+mod1_rf$results
+```
+
+Below show the results using the boosting with trees model for machine learning. The accuracy for this model is 0.996.
+
+```{r, echo=FALSE}
+mod3_gbm$results
+```
+
+We see both the GBM model and the random forest model work similarly effecient in terms of the accuracy on the training dataset. Next we test those two models on the testing and validation datasets to see which model performs better.
+
+## Predict on the testing dataset 
+
+Below show the results using random forest and GBM models for prediciton on testing dataset.
+
+```{r, echo=FALSE, message=F, warning=F}
+pred_rf <- predict(mod1_rf, newdata=testing)
+pred_gbm <- predict(mod3_gbm,newdata=testing)
+qplot(pred_rf,pred_gbm,colour=classe,data=testing)
+```
+
+The overall statisitics for prediction with the random forest model on the testing dataset is as follows:
+
+```{r, echo=FALSE}
+cm_RF <- confusionMatrix(pred_rf, testing$classe)
+cm_RF$overall  # Accuracy 0.9983
+```
+
+The overall statisitics for prediction with the GBM model on the testing dataset is shown below:
+
+```{r, echo=FALSE}
+cm_GBM <- confusionMatrix(pred_gbm, testing$classe) 
+cm_GBM$overall  # Accuracy 0.9972
+```
+
+We see both the models predict similarly effeciently on the testing dataset measured by the values of accuracy, with the random forest model performing slightly better. How about their performance in the validation dataset?
+
+## Predict on the validation dataset
+
+```{r, echo=FALSE}
+pred_rfV <- predict(mod1_rf,newdata=validation)
+pred_gbmV <- predict(mod3_gbm,newdata=validation)
+qplot(pred_rf,pred_gbm,colour=classe,data=testing)
+```
+
+The overall statisitics for prediction with the random forest model on the validation dataset is as follows:
+
+```{r, echo=FALSE}
+cm_RFV <- confusionMatrix(pred_rfV, validation$classe) 
+cm_RFV$overall # Accuracy 1.000
+```
+
+The overall statisitics for prediction with the GBM model on the validation dataset is shown below:
+
+```{r, echo=FALSE}
+cm_GBMV <- confusionMatrix(pred_gbmV, validation$classe) 
+cm_GBMV$overall  # Accuracy 0.998
+```
+
+We see both the models predict similarly effeciently on the validation dataset in terms of the values of accuracy, again with the random forest model performing slightly better.
+
+Based on the prediction performance shown above, we choose the random forest model to predict the classes on 20 test cases.
+
+## Predict 20 test cases
+The random forest model generated above is used for the prediction of those 20 test cases. The predicted classes are shown below:
+
+```{r, echo=FALSE}
+# read the data files
+pmlTest <- read.csv("pml-testing.csv",na.strings=c("NA","#DIV/0!",""))
+pred_tc <- predict(mod1_rf,newdata=pmlTest)
+dtTC <- pmlTest[,c("num_window", "gyros_belt_y", "magnet_arm_z", "roll_dumbbell")]
+predict(mod1_rf,newdata=dtTC)
+# DOESN'T MATTER IF PREDICTORS BEING SUBSET OR NOT
+```
+
+Finally we save the prediction results into a text file for permanent use.
+
+```{r, echo=FALSE}
+write.table(pred_tc,"pred20cases.txt",sep="\t", row.names=T)
+# file.show("pred20cases.txt")
+```
+
+## Acknowledgement
+
+The datasets used for this project come from this source:
+http://groupware.les.inf.puc-rio.br/har
+
+We are thankful for the authors' generousity in allowing us to use their data for this project.
